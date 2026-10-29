@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>根茎克隆群体模拟</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:auto;padding:16px;max-width:1000px;background:#fafafa;color:#222;line-height:1.6}
+  h1{font-size:20px} h2{font-size:15px;margin:18px 0 4px}
+  canvas{width:100%;background:#fff;border:1px solid #ddd;border-radius:6px;display:block}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px} @media(max-width:700px){.grid{grid-template-columns:1fr}}
+  table{border-collapse:collapse;font-size:14px} td,th{padding:4px 12px;text-align:right;border-bottom:1px solid #eee} th:first-child,td:first-child{text-align:left}
+  .note{font-size:13px;color:#666} select{padding:3px 8px;max-width:100%}
+</style>
+</head>
+<body>
+<h1>宽叶香蒲根茎克隆:10 万–100 万 ramet,抽样 72 个</h1>
+<p>沿约 2 km 的带状湿地,由 1 株祖先通过横走茎向两端扩张,只有被重新建立、延续下来的谱系才进入样本谱系。新芽由少数创始细胞建立,可选择是否保留 L1/L2/L3 层结构;固定的杂合位点会以一定速率发生 LOH。
+取样的地上茎由根茎芽长出并生长 1 年。"调用"按 45× 测序、叶片层比例、5% 拷贝数变异区域和 ≥4 条 alt reads 的规则计算,和论文的口径接近。</p>
+<label>情景 <select id="sc"></select></label>
+<h2>与论文对照(每个 ramet 平均)</h2>
+<table id="tab"></table>
+<h2>72 个样本的谱系树(横轴按空间位置排列,纵轴为年代,顶部=祖先)</h2>
+<canvas id="tree" height="340"></canvas>
+<div class="grid">
+  <div><h2>观测 VAF 分布(每 0.02 一格,预期个数)</h2><canvas id="vaf" height="280"></canvas></div>
+  <div><h2>ramet 间固定突变差异数 vs 空间距离</h2><canvas id="iso" height="280"></canvas></div>
+</div>
+<p class="note">除突变率外均为假设:成功建立率 β=0.5/年、可遗传单位比例 10%、迁移率、扩张速度、TE 偏好 b=4.4(由 71% 倒推)、选择强度、SNP:插入:缺失=70:13:17(SNP 占比由手稿的杂合数和杂合比例推算,插入和缺失的分配是假设)。
+每个 ramet 的期望值几乎相同,因为样本都在同一时间点;论文里样本之间 1,434–2,434 的差异,主要可能来自可调用区域和深度的差异,模型没有包含。突变命运按"平均场"计算,样本计数加入泊松噪声。参数扫描见 calib.html。</p>
+<script src="rhizome.js"></script>
+<script>
+const R=RHIZOME,$=id=>document.getElementById(id);
+R.runs.forEach((r,i)=>$('sc').add(new Option(`${r.n_total/1e4} 万 · ${r.label}${r.loh?' · LOH '+r.loh.toExponential(1):''}`,i)));
+$('sc').value=R.runs.findIndex(r=>r.n_total==5e5&&r.k==3&&!r.loh&&!r.layer_keep);
+function fit(c){const r=devicePixelRatio||1,w=c.clientWidth,h=+c.getAttribute('height');c.width=w*r;c.height=h*r;const x=c.getContext('2d');x.scale(r,r);x.font='12px system-ui';return[x,w,h];}
+function render(){
+  const run=R.runs[$('sc').value],s=run.summary,A=run.ramets,mean=k=>A.reduce((a,r)=>a+r[k],0)/A.length;
+  $('tab').innerHTML='<tr><th>指标</th><th>模拟</th><th>论文</th></tr>'+[
+   ['体细胞突变调用数(均值 / 样本间范围)',s.calls.toFixed(0)+' / '+s.calls_min.toFixed(0)+'–'+s.calls_max.toFixed(0),'1,434–2,434'],
+   ['其中假阳性(FPR 17%,偏向 TE)',s.fp.toFixed(0),'FPR=0.17(定义不确定)'],
+   ['全样本共享的 VAF=1 位点(另计)',R.runs[0].params.shared_hom,'209'],
+   ['SNP / 插入 / 缺失',['SNP','INS','DEL'].map(t=>mean(t).toFixed(0)).join(' / '),'杂合 SNP 556–1,109;杂合 indel 251–795'],
+   ['VAF ≥ 0.95(样本特有)',s.hom95.toFixed(0),'160–290(已去掉 209 个全样本共享位点)'],
+   ['VAF < 0.2 的比例',(s.low*100).toFixed(0)+'%','未报告'],
+   ['落在 TE 的比例',(s.te_share*100).toFixed(0)+'%','71%(b 由此倒推,不是独立结果)'],
+   ['真实状态:全分生组织固定杂合 / 纯合',s.fixed.toFixed(0)+' / '+s.hom.toFixed(0),'—'],
+   ['按论文方法估计年龄(调用数÷突变率)',s.age_paper_method.toFixed(0)+' 年','1,781±196;模拟真值 1,800']
+  ].map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
+  drawTree(run);drawVaf(run);drawIso(run);
+}
+function drawTree(run){
+  const [x,W,H]=fit($('tree')),m=40,p=16;let rank=0;
+  function layout(n){ if(!n.c){n.r=rank++;return n.x;} const xs=n.c.map(layout);const o=n.c.map((c,i)=>[xs[i],c]).sort((a,b)=>a[0]-b[0]);n.c=o.map(a=>a[1]);return Math.min(...xs);}
+  const t=JSON.parse(JSON.stringify(run.tree));layout(t);
+  const nl=rank,X=r=>m+(r+.5)/nl*(W-m-p),Y=s=>14+s/R.T*(H-44);
+  function pos(n){ if(!n.c){n.px=X(n.r);return;} n.c.forEach(pos);n.px=(n.c[0].px+n.c[n.c.length-1].px)/2;}
+  pos(t);x.strokeStyle='#2f6f4e';
+  (function draw(n){ if(!n.c)return; const ys=Y(n.t),xs=n.c.map(c=>c.px);x.beginPath();x.moveTo(Math.min(...xs),ys);x.lineTo(Math.max(...xs),ys);x.stroke();
+    n.c.forEach(c=>{x.beginPath();x.moveTo(c.px,ys);x.lineTo(c.px,Y(c.t));x.stroke();draw(c);});})(t);
+  x.fillStyle='#666';[0,600,1200,1800].forEach(s=>x.fillText(s+' 年',2,Y(s)+4));
+  x.fillText('← 湿地一端 … 另一端 →(按位置排序)',m,H-6);
+}
+function drawVaf(run){
+  const [x,W,H]=fit($('vaf')),v=run.vaf,mx=Math.max(...v,1),m=40,w=W-m-10,bw=w/v.length;
+  v.forEach((a,i)=>{const h=a/mx*(H-60);x.fillStyle=i*0.02>=0.94?'#7b3fa0':'#1f77b4';x.fillRect(m+i*bw,H-30-h,Math.max(1,bw-1),h);});
+  x.fillStyle='#666';[0,.25,.5,.75,1].forEach(a=>x.fillText(a.toFixed(2),m+a*w-10,H-12));
+  x.fillStyle='#444';x.fillText('最高 '+mx.toFixed(0)+'(紫 = VAF≥0.95)',m,16);
+}
+function drawIso(run){
+  const [x,W,H]=fit($('iso')),P=run.pairs,gx=Math.max(...P.map(q=>q[0]),1),gy=Math.max(...P.map(q=>q[1]),1),m=50;
+  x.strokeStyle='#ccc';x.strokeRect(m,10,W-m-14,H-50);x.fillStyle='rgba(31,119,180,.3)';
+  P.forEach(q=>{x.beginPath();x.arc(m+q[0]/gx*(W-m-14),10+(H-50)-q[1]/gy*(H-50),2.5,0,7);x.fill();});
+  const n=P.length,mx=P.reduce((a,q)=>a+q[0],0)/n,my=P.reduce((a,q)=>a+q[1],0)/n;
+  const c=P.reduce((a,q)=>a+(q[0]-mx)*(q[1]-my),0),vx=P.reduce((a,q)=>a+(q[0]-mx)**2,0),vy=P.reduce((a,q)=>a+(q[1]-my)**2,0);
+  x.fillStyle='#444';x.fillText('空间距离 (m) → 最大 '+gx.toFixed(0),m,H-10);x.fillText('差异数 ↑ 最大 '+gy,m+4,24);x.fillText('r = '+(c/Math.sqrt(vx*vy||1)).toFixed(2),W-70,24);
+}
+$('sc').onchange=render;addEventListener('resize',render);render();
+</script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>香蒲体细胞突变偏好模拟</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:auto;padding:16px;max-width:900px;background:#fafafa;color:#222;line-height:1.6}
+  h1{font-size:20px} canvas{width:100%;background:#fff;border:1px solid #ddd;border-radius:6px;display:block}
+  td,th{padding:4px 12px;text-align:right;border-bottom:1px solid #eee} th:first-child,td:first-child{text-align:left}
+  .note{font-size:13px;color:#666}
+</style>
+</head>
+<body>
+<h1>宽叶香蒲:TE 区域的体细胞突变富集需要"偏好"吗?</h1>
+<p>观测:71% 的体细胞突变落在仅占基因组 34% 的转座元件(TE)上。若突变按序列长度均匀落点,期望只有 34%。
+下图扫描"TE 相对突变性 b"与"功能区纯化选择强度 s",看什么参数能解释 71%。</p>
+<canvas id="c" height="360"></canvas>
+<table id="t"></table>
+<p class="note">模型假设:非 TE 序列中 15% 为功能区(突变有害),被选择清除的概率为 s;其余突变中性。参数为示意假设,不是你论文的估计值。
+b 可对应 TE 区域的修复缺陷、复制时序、甲基化(5mC 脱氨)、转座活化等机制,模拟本身不区分这些原因。</p>
+<script src="typha.js"></script>
+<script>
+const D=TYPHA, cols=['#1f77b4','#ff9f1c','#d62728'];
+const c=document.getElementById('c'),r=devicePixelRatio||1,W=c.clientWidth,H=360;c.width=W*r;c.height=H*r;
+const x=c.getContext('2d');x.scale(r,r);x.font='12px system-ui';
+const m=50,w=W-m-20,h=H-60,bmin=D.bs[0],bmax=D.bs[D.bs.length-1];
+const X=b=>m+(b-bmin)/(bmax-bmin)*w, Y=f=>10+h-f*h;
+x.strokeStyle='#ccc';x.strokeRect(m,10,w,h);
+[0,.25,.5,.75,1].forEach(f=>{x.fillStyle='#666';x.fillText((f*100)+'%',8,Y(f)+4);x.beginPath();x.strokeStyle='#eee';x.moveTo(m,Y(f));x.lineTo(m+w,Y(f));x.stroke();});
+[[D.te_frac,'基因组中 TE 占比 34%(无偏好的期望)','#888'],[D.observed,'观测 71%','#000']].forEach(([f,l,col])=>{
+  x.strokeStyle=col;x.setLineDash([5,4]);x.beginPath();x.moveTo(m,Y(f));x.lineTo(m+w,Y(f));x.stroke();x.setLineDash([]);x.fillStyle=col;x.fillText(l,m+6,Y(f)-5);});
+D.curves.forEach((cv,i)=>{
+  x.fillStyle=cols[i]+'33';x.beginPath();
+  cv.hi.forEach((v,k)=>{k?x.lineTo(X(D.bs[k]),Y(v)):x.moveTo(X(D.bs[k]),Y(v));});
+  for(let k=cv.lo.length-1;k>=0;k--)x.lineTo(X(D.bs[k]),Y(cv.lo[k]));x.fill();
+  x.strokeStyle=cols[i];x.lineWidth=2;x.beginPath();cv.mean.forEach((v,k)=>{k?x.lineTo(X(D.bs[k]),Y(v)):x.moveTo(X(D.bs[k]),Y(v));});x.stroke();x.lineWidth=1;
+  x.fillStyle=cols[i];x.fillText('选择 s='+cv.s,m+w-110,30+i*16);
+  const rb=cv.required_b; if(rb<=bmax){x.beginPath();x.arc(X(rb),Y(D.observed),4,0,7);x.fill();}
+});
+x.fillStyle='#444';x.fillText('TE 相对突变性 b(TE 每碱基突变率 / 非 TE)→',m,H-10);
+[1,2,3,4,5,6,7].forEach(b=>x.fillText(b,X(b)-3,H-30));
+document.getElementById('t').innerHTML='<tr><th>选择强度 s</th><th>无偏好(b=1)时 TE 占比</th><th>解释 71% 所需 b</th></tr>'+
+ D.curves.map(cv=>`<tr><td>${cv.s}</td><td>${(cv.mean[0]*100).toFixed(1)}%</td><td>${cv.required_b.toFixed(2)}×</td></tr>`).join('');
+</script>
+</body>
+</html>

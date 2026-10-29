@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>克隆繁殖 DNA 变化模拟</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;padding:16px;background:#fafafa;color:#222;max-width:1000px;margin:auto}
+  h1{font-size:20px} .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:8px 0}
+  canvas{width:100%;background:#fff;border:1px solid #ddd;border-radius:6px;display:block;margin:8px 0}
+  .legend span{margin-right:14px;font-size:13px} .dot{display:inline-block;width:10px;height:10px;margin-right:4px}
+  input[type=range]{flex:1;min-width:200px} button,select{padding:4px 10px}
+  #info{font-size:14px;line-height:1.6}
+</style>
+</head>
+<body>
+<h1>高等植物克隆繁殖中 DNA 的变化过程</h1>
+<div class="row">
+  <select id="sc"></select>
+  <button id="play">播放</button>
+  <input id="gen" type="range" min="0" value="0">
+  <b id="glabel"></b>
+</div>
+<div class="legend">
+  <span><i class="dot" style="background:#d62728"></i>固定突变(全部细胞)</span>
+  <span><i class="dot" style="background:#ff9f1c"></i>嵌合突变(部分细胞,越深占比越高)</span>
+  <span><i class="dot" style="background:#1f77b4"></i>甲基化改变</span>
+  <span><i class="dot" style="background:#2ca02c"></i>转座子插入</span>
+</div>
+<canvas id="dna" height="260"></canvas>
+<div id="info"></div>
+<canvas id="chart" height="240"></canvas>
+<p style="font-size:12px;color:#666">说明:参数为示意值,未针对具体物种校准。模型:茎尖分生组织 3 层 × 4 个原始细胞,每次分裂随机漂变(嵌合体分选);组培经单细胞再生,使突变被固定。图中展示的是一条代表性谱系;下方曲线为 300 条谱系的平均。</p>
+<script src="results.js"></script>
+<script>
+const CHR = 5, $ = id => document.getElementById(id);
+const sel = $('sc'), slider = $('gen');
+DATA.scenarios.forEach((s,i)=>sel.add(new Option(s.label,i)));
+slider.max = DATA.generations;
+let timer = null;
+
+function fit(c){const r=devicePixelRatio||1,w=c.clientWidth,h=+c.getAttribute('height');c.width=w*r;c.height=h*r;const x=c.getContext('2d');x.scale(r,r);return [x,w,h];}
+
+function drawDNA(){
+  const s = DATA.scenarios[sel.value], g = +slider.value, d = s.dna[g];
+  const [x,W,H] = fit($('dna'));
+  const m = 40, w = W-2*m, tracks = d.ploidy===4 ? 2 : 1;
+  x.font='12px system-ui';
+  const pos = f => m + f*w;
+  for(let t=0;t<tracks;t++){
+    const y = 40 + t*52;
+    x.fillStyle='#eee'; x.fillRect(m,y,w,16);
+    x.strokeStyle='#999'; for(let c=0;c<=CHR;c++){x.beginPath();x.moveTo(pos(c/CHR),y-4);x.lineTo(pos(c/CHR),y+20);x.stroke();}
+    x.fillStyle='#666'; for(let c=0;c<CHR;c++) x.fillText('Chr'+(c+1),pos((c+.5)/CHR)-12,y-8);
+    d.fixed.forEach(p=>{x.fillStyle='#d62728';x.fillRect(pos(p)-1,y-2,2.5,20);});
+    d.chimeric.forEach(([p,f])=>{x.fillStyle=`rgba(255,159,28,${.35+.65*f})`;x.fillRect(pos(p)-1,y-2,2.5,20);});
+    d.te.forEach(p=>{x.fillStyle='#2ca02c';x.beginPath();x.moveTo(pos(p),y+18);x.lineTo(pos(p)-5,y+30);x.lineTo(pos(p)+5,y+30);x.fill();});
+  }
+  const my = 40 + tracks*52 + 10;
+  x.fillStyle='#444'; x.fillText('甲基化位点(1000 个,蓝=与原始植株不同)',m,my-4);
+  x.fillStyle='#e8e8e8'; x.fillRect(m,my,w,14);
+  x.fillStyle='#1f77b4'; d.meth.forEach(i=>x.fillRect(m+i/1000*w,my,Math.max(1.5,w/1000),14));
+  $('glabel').textContent = `第 ${g} 代 · ${d.ploidy===4?'4n(基因组加倍)':'2n'}`;
+  $('info').innerHTML = `固定突变 <b>${d.fixed.length}</b> · 嵌合突变 <b>${d.chimeric.length}</b> · 甲基化改变 <b>${d.meth.length}</b> 处 · 转座子新插入 <b>${d.te.length}</b>`;
+}
+
+function drawChart(){
+  const s = DATA.scenarios[sel.value], [x,W,H] = fit($('chart'));
+  const keys=[['fixed','固定突变','#d62728',1],['chimeric','嵌合突变','#ff9f1c',1],['te','转座子拷贝','#2ca02c',1],['methylation','甲基化改变比例','#1f77b4',0],['tetraploid','4n 比例','#7b3fa0',0]];
+  const m=40, w=W-m-20, h=H-50, n=DATA.generations;
+  x.font='12px system-ui'; x.strokeStyle='#ccc'; x.strokeRect(m,10,w,h);
+  keys.forEach(([k,label,col,abs],i)=>{
+    const v = s.series[k].map(p=>p.mean), mx = Math.max(...v,1e-9);
+    x.strokeStyle=col; x.beginPath();
+    v.forEach((y,gi)=>{const px=m+gi/n*w,py=10+h-(y/mx)*h; gi?x.lineTo(px,py):x.moveTo(px,py);});
+    x.stroke(); x.fillStyle=col; x.fillText(`${label}(最大 ${mx.toFixed(mx<1?3:1)})`,m+8+(i%3)*230,28+Math.floor(i/3)*16);
+  });
+  x.fillStyle='#666'; x.fillText('代数 →(各曲线按自身最大值归一化)',m,H-8);
+  const cx=m+(+slider.value)/n*w; x.strokeStyle='#000'; x.setLineDash([4,3]); x.beginPath(); x.moveTo(cx,10); x.lineTo(cx,10+h); x.stroke(); x.setLineDash([]);
+}
+
+function render(){drawDNA();drawChart();}
+sel.onchange=()=>{slider.value=0;render();}; slider.oninput=render; addEventListener('resize',render);
+$('play').onclick=()=>{
+  if(timer){clearInterval(timer);timer=null;$('play').textContent='播放';return;}
+  $('play').textContent='暂停'; if(+slider.value>=DATA.generations) slider.value=0;
+  timer=setInterval(()=>{ if(+slider.value>=DATA.generations){$('play').onclick();return;} slider.value=+slider.value+1; render(); },300);
+};
+render();
+</script>
+</body>
+</html>

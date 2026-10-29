@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>参数校准</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:auto;padding:16px;max-width:1000px;background:#fafafa;color:#222;line-height:1.6}
+  h1{font-size:20px} h2{font-size:15px;margin:18px 0 4px}
+  canvas{width:100%;background:#fff;border:1px solid #ddd;border-radius:6px;display:block}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px} @media(max-width:700px){.grid{grid-template-columns:1fr}}
+  table{border-collapse:collapse;font-size:13px;width:100%} td,th{padding:3px 8px;text-align:right;border-bottom:1px solid #eee}
+  tr.sel{background:#eef5f1} tbody tr{cursor:pointer} .note{font-size:13px;color:#666}
+  .marg{display:flex;flex-wrap:wrap;gap:14px;font-size:13px} .marg div{background:#fff;border:1px solid #ddd;border-radius:6px;padding:6px 10px}
+  .wrap{overflow-x:auto}
+</style>
+</head>
+<body>
+<h1>用论文数字约束未知参数</h1>
+<p>在综合模型里扫描 5 个没有数据的参数:新芽的创始细胞数、芽保留层结构的概率、LOH 速率、假阳性占调用的比例、假阳性中看似纯合的比例。
+"符合"的条件:每个样本平均调用数在 1,434–2,434 之间,且样本特有的 VAF≥0.95 位点数在 160–290 之间(手稿与你提供的数字)。</p>
+<div id="headline"></div>
+<div class="grid">
+  <div><h2>所有组合:调用数 vs VAF≥0.95 位点数(方框=论文范围)</h2><canvas id="sc" height="320"></canvas></div>
+  <div><h2>所选组合的观测 VAF 分布</h2><canvas id="vaf" height="320"></canvas></div>
+</div>
+<h2>符合条件的组合里,各参数取值出现的次数</h2>
+<div class="marg" id="marg"></div>
+<h2>最接近论文的组合(点击一行看 VAF 分布)</h2>
+<div class="wrap"><table id="tab"></table></div>
+<p class="note">只有两个约束条件,而未知参数有 5 个,所以许多组合都能符合,这张表说明的是"哪些参数被约束住、哪些没有",不是唯一解。
+"按论文方法估计年龄"= 调用数 ÷ 突变率,模拟的真实年龄为 1,800 年。VAF&lt;0.2 的比例是模型的预测,可以与真实数据对照,用来进一步区分组合。</p>
+<script src="calib.js"></script>
+<script>
+const C=CALIB,$=id=>document.getElementById(id),rows=C.rows,ok=rows.filter(r=>r.ok);
+const lab={k:'创始细胞数',layer_keep:'保留层结构概率',loh:'LOH 速率',fpr:'假阳性比例',fp_hom:'假阳性中看似纯合'};
+const fmt=(k,v)=>k=='loh'?(v?(+v).toExponential(1):'0'):v;
+$('headline').innerHTML=`共 ${rows.length} 个组合,其中 <b>${ok.length}</b> 个同时符合两个条件。`;
+$('marg').innerHTML=Object.keys(C.grid).map(k=>`<div><b>${lab[k]}</b><br>`+C.grid[k].map(v=>`${fmt(k,v)}:${ok.filter(r=>r[k]==v).length}`).join('<br>')+'</div>').join('');
+let cur=0;
+function fit(c){const r=devicePixelRatio||1,w=c.clientWidth,h=+c.getAttribute('height');c.width=w*r;c.height=h*r;const x=c.getContext('2d');x.scale(r,r);x.font='12px system-ui';return[x,w,h];}
+function drawScatter(){
+  const [x,W,H]=fit($('sc')),m=50,xmax=Math.max(...rows.map(r=>r.calls))*1.05,ymax=Math.max(...rows.map(r=>r.hom95),300)*1.05;
+  const X=v=>m+v/xmax*(W-m-12),Y=v=>H-36-v/ymax*(H-50);
+  x.strokeStyle='#ccc';x.strokeRect(m,14,W-m-12,H-50);
+  x.strokeStyle='#d62728';x.setLineDash([5,4]);x.strokeRect(X(C.target.calls[0]),Y(C.target.hom95[1]),X(C.target.calls[1])-X(C.target.calls[0]),Y(C.target.hom95[0])-Y(C.target.hom95[1]));x.setLineDash([]);
+  rows.forEach((r,i)=>{x.fillStyle=r.ok?'rgba(47,111,78,.75)':'rgba(120,120,120,.35)';x.beginPath();x.arc(X(r.calls),Y(r.hom95),i==cur?6:3,0,7);x.fill();});
+  x.fillStyle='#444';x.fillText('调用数 / 样本 →',m,H-10);x.fillText('VAF≥0.95 ↑',m+4,28);
+  [0,1000,2000,3000].forEach(v=>{if(v<xmax)x.fillText(v,X(v)-10,H-22);});[0,100,200,300].forEach(v=>{if(v<ymax)x.fillText(v,8,Y(v)+4);});
+}
+function drawVaf(){
+  const r=rows[cur],[x,W,H]=fit($('vaf')),v=r.vaf,mx=Math.max(...v,1),m=40,w=W-m-10,bw=w/v.length;
+  v.forEach((a,i)=>{const h=a/mx*(H-60);x.fillStyle=i*0.02>=0.94?'#7b3fa0':'#1f77b4';x.fillRect(m+i*bw,H-30-h,Math.max(1,bw-1),h);});
+  x.fillStyle='#666';[0,.25,.5,.75,1].forEach(a=>x.fillText(a.toFixed(2),m+a*w-10,H-12));
+  x.fillStyle='#444';x.fillText(`k=${r.k} 保留层 ${r.layer_keep} LOH ${fmt('loh',r.loh)} FPR ${r.fpr} 假纯合 ${r.fp_hom}`,m,16);
+}
+function table(){
+  const show=rows.slice(0,25);
+  $('tab').innerHTML='<thead><tr><th>创始细胞</th><th>保留层</th><th>LOH</th><th>FPR</th><th>假纯合</th><th>调用数</th><th>VAF≥0.95</th><th>VAF&lt;0.2</th><th>论文法年龄</th><th>符合</th></tr></thead><tbody>'+
+   show.map((r,i)=>`<tr data-i="${i}" class="${i==cur?'sel':''}"><td>${r.k}</td><td>${r.layer_keep}</td><td>${fmt('loh',r.loh)}</td><td>${r.fpr}</td><td>${r.fp_hom}</td><td>${r.calls.toFixed(0)}</td><td>${r.hom95.toFixed(0)}</td><td>${(r.low*100).toFixed(0)}%</td><td>${r.age_paper_method.toFixed(0)}</td><td>${r.ok?'是':''}</td></tr>`).join('')+'</tbody>';
+  $('tab').querySelectorAll('tbody tr').forEach(tr=>tr.onclick=()=>{cur=+tr.dataset.i;render();});
+}
+function render(){table();drawScatter();drawVaf();}
+addEventListener('resize',render);render();
+</script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>预期观测 VAF 分布</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:auto;padding:16px;max-width:980px;background:#fafafa;color:#222;line-height:1.6}
+  h1{font-size:20px} canvas{width:100%;background:#fff;border:1px solid #ddd;border-radius:6px;display:block;margin-top:8px}
+  select{padding:3px 8px;margin-right:8px} .note{font-size:13px;color:#666} #sum{font-size:14px;margin:8px 0}
+</style>
+</head>
+<body>
+<h1>模型预期的"观测" VAF 分布(加上测序抽样、层组成、CNV、假阳性)</h1>
+<p>把真实分生组织里的突变状态,经过叶片组织的层比例、45× 深度的读数抽样(负二项)、局部 3 拷贝区域(CNV)和假阳性,换算成测序能看到的 VAF。
+这是一个"零假设":看真实数据里的峰,哪些是这些观测效应本身就会产生的。</p>
+<label>情景 <select id="c"></select></label>
+<label>L1:L2:L3 在叶片中的比例 <select id="s"></select></label>
+<label><input type="checkbox" id="fp"> 加入假阳性(占调用 17%,低频尾)</label>
+<div id="sum"></div>
+<canvas id="cv" height="340"></canvas>
+<p class="note">假设:深度均值 45、方差为均值的 2 倍;调用条件为 alt 读数 ≥4、深度 ≥15;5% 的位点位于 3 拷贝区域(VAF 为 1/3 或 2/3);叶片的层比例未知,"典型"取 0.15:0.35:0.50 仅为示意;假阳性按低频泊松尾建模,17% 取自手稿的 FPR,其定义我不确定。
+层被打乱的窄瓶颈情景里,几乎所有突变都固定在全部细胞,层比例不起作用。取样茎最后一年的生长已包含在内,但它产生的新突变频率太低(约 1/24),在 45× 下大多调用不出来。</p>
+<script src="vafobs.js"></script>
+<script>
+const V=VAFOBS,$=id=>document.getElementById(id);
+V.runs.forEach((r,i)=>$('c').add(new Option(`${r.layer_keep?'保留层结构概率 '+r.layer_keep+',每层 '+r.k+' 个创始细胞':(r.k==12?'无瓶颈':r.k+' 个创始细胞(层被打乱)')}${r.loh?',LOH='+r.loh.toExponential(1):''}`,i)));
+Object.keys(V.schemes).forEach(k=>$('s').add(new Option(k=='equal'?'等比例 1/3 : 1/3 : 1/3':'典型 0.15 : 0.35 : 0.50',k)));
+function render(){
+  const r=V.runs[$('c').value],h=r.hist[$('s').value].slice(),nb=h.length-1;
+  let tot=h.reduce((a,b)=>a+b,0);
+  const fpOn=$('fp').checked;
+  const fpv=V.fp.map(v=>v*tot*V.fpr/(1-V.fpr)),all=fpOn?h.map((v,i)=>v+fpv[i]):h;
+  const T=all.reduce((a,b)=>a+b,0),pct=(a,b)=>(all.slice(Math.round(a/V.bin),Math.round(b/V.bin)).reduce((x,y)=>x+y,0)/T*100).toFixed(0)+'%';
+  $('sum').innerHTML=`每个 ramet 预期调用 <b>${T.toFixed(0)}</b> 个 · VAF &lt;0.2:<b>${pct(0,.2)}</b> · 0.2–0.4:<b>${pct(.2,.4)}</b> · 0.4–0.6:<b>${pct(.4,.6)}</b> · &gt;0.9:<b>${pct(.9,1.02)}</b>`;
+  const c=$('cv'),dr=devicePixelRatio||1,W=c.clientWidth,H=340;c.width=W*dr;c.height=H*dr;const x=c.getContext('2d');x.scale(dr,dr);x.font='12px system-ui';
+  const m=46,w=W-m-14,mx=Math.max(...all),bw=w/nb;
+  all.forEach((v,i)=>{const bh=v/mx*(H-60);x.fillStyle='#1f77b4';x.fillRect(m+i*bw,H-30-bh,bw-1,bh);
+    if(fpOn){const fh=fpv[i]/mx*(H-60);x.fillStyle='#d62728';x.fillRect(m+i*bw,H-30-fh,bw-1,fh);}});
+  x.fillStyle='#666';[0,.25,.5,.75,1].forEach(a=>x.fillText(a.toFixed(2),m+a*w-8,H-12));
+  x.fillStyle='#444';x.fillText('每 0.02 一个格的预期个数(最高 '+mx.toFixed(0)+')'+(fpOn?',红=假阳性':''),m,16);
+}
+$('c').onchange=$('s').onchange=$('fp').onchange=render;addEventListener('resize',render);render();
+</script>
+</body>
+</html>

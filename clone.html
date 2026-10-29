@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>1 株到克隆群体模拟</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:auto;padding:16px;max-width:980px;background:#fafafa;color:#222;line-height:1.6}
+  h1{font-size:20px} h2{font-size:15px;margin:18px 0 4px}
+  canvas{width:100%;background:#fff;border:1px solid #ddd;border-radius:6px;display:block}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px} @media(max-width:700px){.grid{grid-template-columns:1fr}}
+  table{border-collapse:collapse;font-size:14px} td,th{padding:4px 12px;text-align:right;border-bottom:1px solid #eee} th:first-child,td:first-child{text-align:left}
+  .note{font-size:13px;color:#666}
+</style>
+</head>
+<body>
+<h1>1 株祖先 → 约 1,800 年的克隆群体(宽叶香蒲模型)</h1>
+<p>每个 ramet 有 12 个分生细胞(3 层 × 4)。每年:突变(5.52×10⁻⁹/位点/年 × 217 Mb ≈ 1.2 个/细胞)、层内漂变、细胞水平对有害突变的选择,并以一定概率建立新 ramet(瓶颈)。末了抽 72 个 ramet 做"测序"。</p>
+<select id="sc"></select>
+<h2>与论文对照(每个 ramet)</h2>
+<table id="tab"></table>
+<div class="grid">
+  <div><h2>72 个抽样 ramet 的空间位置(颜色=可检出突变数)</h2><canvas id="map" height="300"></canvas></div>
+  <div><h2>VAF 分布(嵌合突变,杂合上限 0.5)</h2><canvas id="vaf" height="300"></canvas></div>
+</div>
+<h2>ramet 间遗传距离(固定突变差异数)vs 空间距离</h2>
+<canvas id="iso" height="300"></canvas>
+<p class="note">参数为假设,仅突变率和 TE 占比取自论文。模拟 300 个活 ramet(真实克隆大得多)。
+"可检出"=被至少 4/12 个分生细胞携带(约 VAF≥0.17)。论文报告每个样本 1,434–2,434 个体细胞突变、50/72 个样本带固定突变,
+但没有报告 VAF 分布与瓶颈检验;这里的 VAF 与遗传距离–空间距离是模型预测,可待真实数据检验。</p>
+<script src="clone.js"></script>
+<script>
+const $=id=>document.getElementById(id), sel=$('sc');
+CLONE.scenarios.forEach((s,i)=>sel.add(new Option(s.label,i)));
+function fit(c){const r=devicePixelRatio||1,w=c.clientWidth,h=+c.getAttribute('height');c.width=w*r;c.height=h*r;const x=c.getContext('2d');x.scale(r,r);x.font='12px system-ui';return[x,w,h];}
+const mean=(a,k)=>a.reduce((s,r)=>s+r[k],0)/a.length;
+function render(){
+  const s=CLONE.scenarios[sel.value], R=s.ramets;
+  $('tab').innerHTML='<tr><th>指标</th><th>模拟</th><th>论文</th></tr>'+[
+   ['可检出体细胞突变 / ramet',mean(R,'detected').toFixed(0),'1,434–2,434'],
+   ['其中固定(全分生组织携带)',mean(R,'fixed').toFixed(0),'50/72 个样本带固定突变'],
+   ['嵌合(部分携带)',mean(R,'chimeric').toFixed(0),'未报告'],
+   ['落在 TE 的比例',(mean(R,'te_all')*100).toFixed(0)+'%','71%'],
+   ['有害功能区突变 / ramet',mean(R,'func').toFixed(0),'非同义 7–21(口径不同)'],
+   ['抽样 ramet 的空间跨度',s.extent_m.join(' × ')+' m','最大跨度 >2 km']
+  ].map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
+  // map
+  let [x,W,H]=fit($('map')); const xs=R.map(r=>r.x),ys=R.map(r=>r.y),x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+  const lo=Math.min(...R.map(r=>r.detected)),hi=Math.max(...R.map(r=>r.detected),lo+1),p=24,sc=Math.min((W-2*p)/(x1-x0||1),(H-2*p)/(y1-y0||1));
+  R.forEach(r=>{const t=(r.detected-lo)/(hi-lo);x.fillStyle=`hsl(${210-t*200},70%,50%)`;x.beginPath();x.arc(p+(r.x-x0)*sc,p+(r.y-y0)*sc,5,0,7);x.fill();});
+  x.fillStyle='#666';x.fillText(`颜色范围 ${lo}–${hi}`,8,H-8);
+  // vaf
+  [x,W,H]=fit($('vaf')); const h=s.vaf_hist,mx=Math.max(...h,1),bw=(W-60)/h.length;
+  h.forEach((v,i)=>{x.fillStyle='#1f77b4';x.fillRect(50+i*bw,H-30-v/mx*(H-50),bw-1,v/mx*(H-50));});
+  x.fillStyle='#444';x.fillText('VAF 0',46,H-14);x.fillText('0.5',W-26,H-14);x.fillText('嵌合突变数(最大 '+mx+')',50,16);
+  // isolation by distance
+  [x,W,H]=fit($('iso')); const P=s.pairs,gx=Math.max(...P.map(q=>q[0]),1),gy=Math.max(...P.map(q=>q[1]),1),m=50;
+  x.strokeStyle='#ccc';x.strokeRect(m,10,W-m-14,H-50);x.fillStyle='rgba(31,119,180,.35)';
+  P.forEach(q=>{x.beginPath();x.arc(m+q[0]/gx*(W-m-14),10+(H-50)-q[1]/gy*(H-50),2.5,0,7);x.fill();});
+  const n=P.length,mx_=P.reduce((a,q)=>a+q[0],0)/n,my_=P.reduce((a,q)=>a+q[1],0)/n;
+  const cov=P.reduce((a,q)=>a+(q[0]-mx_)*(q[1]-my_),0),vx=P.reduce((a,q)=>a+(q[0]-mx_)**2,0),vy=P.reduce((a,q)=>a+(q[1]-my_)**2,0);
+  x.fillStyle='#444';x.fillText('空间距离 (m) → 最大 '+gx.toFixed(0),m,H-10);x.fillText('遗传距离 ↑ 最大 '+gy,m+4,24);
+  x.fillText('相关系数 r = '+(cov/Math.sqrt(vx*vy||1)).toFixed(2),W-140,24);
+}
+sel.onchange=render;addEventListener('resize',render);render();
+</script>
+</body>
+</html>
