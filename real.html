@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>逐细胞克隆模拟</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:auto;padding:16px;max-width:1000px;background:#fafafa;color:#222;line-height:1.6}
+  h1{font-size:20px} h2{font-size:15px;margin:20px 0 4px}
+  canvas{width:100%;background:#fff;border:1px solid #ddd;border-radius:6px;display:block}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px} @media(max-width:700px){.grid{grid-template-columns:1fr}}
+  table{border-collapse:collapse;font-size:13px;width:100%} td,th{padding:3px 8px;text-align:right;border-bottom:1px solid #eee}
+  td:first-child,th:first-child{text-align:left}
+  .note{font-size:13px;color:#666} .wrap{overflow-x:auto}
+  .legend{font-size:12px;display:flex;flex-wrap:wrap;gap:10px;margin:4px 0} .legend span{display:inline-flex;align-items:center;gap:4px}
+  .legend i{width:12px;height:12px;display:inline-block;border-radius:2px}
+  .bad{color:#b23b3b} .ok{color:#2f6f4e}
+</style>
+</head>
+<body>
+<h1>逐细胞、逐 reads 的克隆模拟</h1>
+<p>每个细胞的谱系都被追踪下来(3 层 × 4 个原始细胞,腋芽按层保留结构,偶尔有相邻层替换)。突变和 LOH 放在真实的细胞谱系上。参考基因组取自克隆里的一个 ramet。测序逐条模拟 reads,假阳性按机制生成,最后按论文的流程过滤和统计。</p>
+
+<h2>模拟与论文对照</h2>
+<div class="wrap"><table id="cmp"></table></div>
+
+<div class="grid">
+  <div><h2>VAF 分布(按来源叠加,72 个样本平均,分箱 0.02)</h2><div class="legend" id="leg"></div><canvas id="vaf" height="300"></canvas></div>
+  <div><h2>每个样本 VAF≥0.95 的位点数 vs 到参考 ramet 的距离</h2><canvas id="sc" height="300"></canvas>
+    <p class="note" id="scnote"></p></div>
+</div>
+
+<h2>迭代记录</h2>
+<p class="note">每一轮改一个或几个机制,按与论文观测的差距打分(越低越好;核心分只算调用数、VAF≥0.95、共享位点、年龄和创始杂合位点共享)。
+"创始杂合全共享"= 创始个体的杂合位点里,72 个样本仍全部杂合的比例;论文的共享杂合 SNP 直方图在 72 处有明显的峰,要求它接近 1。点击轮次可以展开。</p>
+<div class="wrap"><table id="iter"></table></div>
+
+<div class="grid">
+  <div><h2>体细胞调用被几个样本共享</h2><canvas id="share" height="260"></canvas></div>
+  <div><h2>创始杂合位点仍为杂合的样本数</h2><canvas id="germ" height="260"></canvas></div>
+</div>
+
+<h2>GMM 拟合(BIC 在 4–6 个组分中选择)</h2>
+<div class="wrap"><table id="gmm"></table></div>
+
+<h2>主要假设</h2>
+<ul class="note" id="assume"></ul>
+
+<script src="real.js"></script>
+<script src="real_iter.js"></script>
+<script>
+const R=REAL,S=R.summary,P=R.params,$=id=>document.getElementById(id);
+const COL={fixed:'#1f77b4',mosaic:'#9ecae1',loh_full:'#7b3fa0',loh_part:'#c4a0d8',cnv:'#2ca02c',reversed:'#ff7f0e',fp_paralog:'#d62728',fp_hotspot:'#f2a0a0',fp_asm:'#555'};
+const LAB={fixed:'真实·全分生组织杂合',mosaic:'真实·嵌合',loh_full:'真实·完全 LOH',loh_part:'真实·部分 LOH',cnv:'真实·3 拷贝区',reversed:'参考个体突变(方向反转)',fp_paralog:'假阳性·旁系同源',fp_hotspot:'假阳性·错误热点',fp_asm:'假阳性·组装错误'};
+const f0=x=>Math.round(x).toLocaleString();
+const rows=[
+ ['每个样本的调用数',`${f0(S.calls)}(${f0(S.calls_min)}–${f0(S.calls_max)})`,'1,434–2,434'],
+ ['去掉共享位点后 VAF≥0.95',`${f0(S.hom95)}(${S.hom95_min}–${S.hom95_max})`,'160–290'],
+ ['72 个样本共享的 VAF=1 位点',f0(S.shared_removed),'209'],
+ ['TE 内突变比例',(S.te_share*100).toFixed(0)+'%','71%'],
+ ['假阳性比例',(S.fp_share*100).toFixed(0)+'%','FPR 0.17'],
+ ['非同义突变 / 样本',S.nonsyn.toFixed(0),'7–21(均值 13.7)'],
+ ['按论文方法估计的年龄',`${f0(S.age)} ± ${f0(S.age_sd)} 年(真实 ${R.params?1800:''} 年)`,'1,781 ± 196 年'],
+ ['GMM 最优组分数(前 '+R.peaks.length+' 个样本)',[4,5,6].map(k=>`K=${k}:${R.peaks.filter(q=>q.best_k==k).length}`).join(','),'一致为 5'],
+ ['创始杂合位点在 72 个样本中全部杂合',(S.germline_all72*100).toFixed(0)+'%','72 处明显的峰'],
+];
+$('cmp').innerHTML='<thead><tr><th>指标</th><th>模拟</th><th>论文</th></tr></thead><tbody>'+rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('')+'</tbody>';
+$('leg').innerHTML=Object.keys(COL).filter(k=>R.hist_src[k].some(v=>v>0)).map(k=>`<span><i style="background:${COL[k]}"></i>${LAB[k]}</span>`).join('');
+function fit(c){const r=devicePixelRatio||1,w=c.clientWidth,h=+c.getAttribute('height');c.width=w*r;c.height=h*r;const x=c.getContext('2d');x.scale(r,r);x.font='12px system-ui';return[x,w,h];}
+function bars(id,series,labels,xt){const [x,W,H]=fit($(id)),m=44,n=series[0][1].length,bw=(W-m-10)/n;
+  const tot=Array.from({length:n},(_,i)=>series.reduce((a,s)=>a+s[1][i],0)),mx=Math.max(...tot,1);
+  for(let i=0;i<n;i++){let y=H-28;for(const [c,v] of series){const h=v[i]/mx*(H-50);x.fillStyle=c;x.fillRect(m+i*bw,y-h,Math.max(1,bw-0.5),h);y-=h;}}
+  x.fillStyle='#666';xt.forEach(([pos,t])=>x.fillText(t,m+pos*bw-8,H-10));x.fillText(Math.round(mx),4,24);x.fillText('0',30,H-28);}
+function drawVaf(){const ser=Object.keys(COL).map(k=>[COL[k],R.hist_src[k]]);bars('vaf',ser,null,[0,.25,1/3,.5,2/3,.75,1].map(a=>[a*50,a==1/3?'1/3':a==2/3?'2/3':a.toFixed(2)]));}
+function drawSc(){const [x,W,H]=fit($('sc')),D=R.per_sample,m=44,xm=Math.max(...D.map(d=>d.dref))*1.05,ym=Math.max(...D.map(d=>d.hom95),300)*1.05;
+  const X=v=>m+v/xm*(W-m-12),Y=v=>H-30-v/ym*(H-46);x.strokeStyle='#ccc';x.strokeRect(m,14,W-m-12,H-44);
+  x.fillStyle='rgba(47,111,78,.12)';x.fillRect(m,Y(290),W-m-12,Y(160)-Y(290));
+  D.forEach(d=>{x.fillStyle='rgba(255,127,14,.8)';x.beginPath();x.arc(X(d.dref),Y(d.rev95),3,0,7);x.fill();x.fillStyle='rgba(31,119,180,.8)';x.beginPath();x.arc(X(d.dref),Y(d.hom95),3,0,7);x.fill();});
+  x.fillStyle='#444';x.fillText('到参考 ramet 的距离(m)→',m,H-8);x.fillText('VAF≥0.95 位点数',m+4,28);
+  [0,100,200,300,400,500].forEach(v=>{if(v<ym)x.fillText(v,6,Y(v)+4)});
+  const xs=D.map(d=>d.dref),ys=D.map(d=>d.hom95),mx=xs.reduce((a,b)=>a+b)/xs.length,my=ys.reduce((a,b)=>a+b)/ys.length;
+  let a=0,b=0,c=0;xs.forEach((v,i)=>{a+=(v-mx)*(ys[i]-my);b+=(v-mx)**2;c+=(ys[i]-my)**2});
+  $('scnote').innerHTML=`蓝点 = 全部 VAF≥0.95,橙点 = 其中来自参考个体突变(方向反转)的部分;绿色带 = 论文的 160–290。相关系数 r = ${(a/Math.sqrt(b*c)).toFixed(2)}。离参考 ramet 越近的样本,和它共享的突变越多,反转造成的 VAF=1 就越少。`;}
+function drawShare(){const s=R.sharing.slice(1),t=R.sharing_true.slice(1),fp=s.map((v,i)=>v-t[i]),lg=v=>v>0?Math.log10(v+1):0;
+  bars('share',[['#1f77b4',t.map(lg)],['#d62728',fp.map(lg)]],null,[[0,'1'],[17,'18'],[35,'36'],[53,'54'],[71,'72']]);
+  const [x,W,H]=[$('share').getContext('2d')];x.fillStyle='#444';x.fillText('蓝 = 真实,红 = 假阳性(纵轴 log10)',50,14);}
+function drawGerm(){const g=R.germline.slice(1);bars('germ',[['#7b3fa0',g]],null,[[0,'1'],[35,'36'],[71,'72']]);}
+const PN={k:'创始细胞/层',layer_keep:'保留层',swap:'层替换',loh:'LOH',weights:'叶片层比例',ref_split:'参考分出年',call_a50:'检出灵敏度',func_keep:'功能区保留',dropout:'独立缺失',mu_scale:'突变率倍数',cnv_te:'TE 3 拷贝比例',leaf_founders:'叶片创始细胞',lib_sd:'文库差异',indel_bias:'indel 偏差',od:'过度离散',seed:'种子'};
+const pstr=p=>Object.entries(p).map(([k,v])=>`${PN[k]||k}=${Array.isArray(v)?v.join(':'):k=='ref_split'?(v<0?'随机 ramet':v):v}`).join(',')||'初始默认';
+let openIt=new Set(['it5']);
+function iterTable(){const best={};ITER.rows.forEach(r=>{if(!best[r.iter]||r.score<best[r.iter].score)best[r.iter]=r});
+ const cell=(v,lo,hi)=>`<td class="${v>=lo&&v<=hi?'ok':'bad'}">${v}</td>`;
+ $('iter').innerHTML='<thead><tr><th>轮次 / 设置</th><th>总分</th><th>核心分</th><th>调用数</th><th>VAF≥0.95</th><th>共享 VAF=1</th><th>论文法年龄</th><th>创始杂合全共享</th><th>非同义</th><th>K=5 比例</th></tr></thead><tbody>'+
+ Object.keys(ITER.notes).map(it=>{const rs=ITER.rows.filter(r=>r.iter==it).sort((a,b)=>a.score-b.score);
+  const head=`<tr data-it="${it}" style="background:#f0f0f0;cursor:pointer"><td colspan="10"><b>${it}</b> ${ITER.notes[it]}(最佳 ${best[it].score})${openIt.has(it)?' ▾':' ▸'}</td></tr>`;
+  return head+(openIt.has(it)?rs.map(r=>`<tr><td style="font-size:12px">${pstr(r.params)}</td><td>${r.score}</td><td>${r.core}</td>${cell(Math.round(r.calls),1434,2434)}${cell(Math.round(r.hom95),160,290)}${cell(r.shared,150,270)}${cell(Math.round(r.age),1581,1981)}${cell(r.germ72,0.85,1)}${cell(Math.round(r.nonsyn),7,21)}<td>${r.k5}</td></tr>`).join(''):'');}).join('')+'</tbody>';
+ $('iter').querySelectorAll('tr[data-it]').forEach(tr=>tr.onclick=()=>{const k=tr.dataset.it;openIt.has(k)?openIt.delete(k):openIt.add(k);iterTable();});}
+iterTable();
+$('gmm').innerHTML='<thead><tr><th>样本</th><th>最优 K</th><th>最优模型的峰位置</th><th>强制 K=5 的峰位置</th></tr></thead><tbody>'+
+ R.peaks.map(q=>`<tr><td>${q.sample+1}</td><td>${q.best_k}</td><td>${q.comp.map(c=>c.mu.toFixed(2)).join(' / ')}</td><td>${q.comp5.map(c=>c.mu.toFixed(2)).join(' / ')}</td></tr>`).join('')+'</tbody>';
+$('assume').innerHTML=[
+ `分生组织 3 层 × 4 个原始细胞;每年层内重新抽样(漂变),相邻外层替换概率 ${P.swap}/细胞·年;每谱系每年经过 ${P.beta} 次腋芽,每层 ${P.k} 个创始细胞,${P.layer_keep*100}% 的芽保留层结构。`,
+ `突变率 5.52×10⁻⁹/位点·年 × 217 Mb × ${P.mu_scale}(有效体细胞速率,迭代拟合);SNP:INS:DEL = 70:13:17;TE 突变倾向 4.4 倍。功能区突变只有 ${P.func_keep*100}% 逃过净化选择。`,
+ `LOH ${P.loh.toExponential(0)}/杂合位点·细胞·年,纯合突变型和丢失突变各占一半;同样作用于创始杂合位点。`,
+ `叶片取样:每层 ${P.leaf_founders} 个细胞,三层权重 ${P.weights.map(w=>w.toFixed(2)).join(' : ')}。`,
+ `参考 ramet:${P.ref_split>=0?'在克隆早期('+P.ref_split+' 年,样本共同祖先之上)就和样本谱系分开':'随机一个 ramet'}。参考基因组:单倍型组装沿一条单倍型取多数碱基;3 拷贝塌缩区占 TE 位点的 ${P.cnv_te*100}%、其他位点的 ${P.cnv_other*100}%,这些位点不反转。`,
+ `测序:可调用比例 U(${P.callable_min}, 1),叠加在每个位点固定的可比对性上,另有 ${P.dropout*100}% 的位点×样本独立缺失;深度 NB(45, 方差 90);等位基因过度离散 ${P.od};插入缺失的 alt reads 少 ${P.indel_bias*100}%;≥15× 且 ≥4 条 alt reads 才调用。`,
+ `假阳性:${P.n_paralog} 个旁系同源位点(错配比例 0.08–0.45)、${P.n_hotspot} 个错误热点(平均错误率 ${P.hot_err})、${P.n_asm} 个组装错误;85% 在 TE;各样本文库质量差异 log-sd ${P.lib_sd}。这些数量是假设,不是由数据估计的。`,
+].map(t=>`<li>${t}</li>`).join('');
+function render(){drawVaf();drawSc();drawShare();drawGerm();}
+addEventListener('resize',render);render();
+</script>
+</body>
+</html>
